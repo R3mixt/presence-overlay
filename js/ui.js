@@ -19,9 +19,11 @@ function presenceSay(n){
   typeBody(n.body||'');
   currentNode=n;
   document.getElementById('focusLine').textContent=n.name;
-  document.getElementById('audioNote').textContent=
-    audioMap[n.id]?'Narration: recorded audio':'Narration: Presence synthesis (awaiting recorded audio)';
+  lastNoteId=n.id;
+  updateVoiceNote();
+  // announce the record, then read it — queued, so nothing cuts anything off
   sysVoice('Information requested. '+n.name.replace(/—/g,',')+'.');
+  if(n.body)vSay(n.body,false);
   queryArchive(wikiFor[n.id]||n.name.split('—')[0].trim().replace(/ /g,'_'),false);
 }
 let typeTimer=null,tickN=0;
@@ -55,7 +57,7 @@ function glitchDive(title){
   presenceVoice('Information requested. '+title.replace(/_/g,' ')+'.');
   setTimeout(()=>{
     panel.classList.add('open');
-    queryArchive(title,false);
+    queryArchive(title,true); // deep dive: read the retrieved summary aloud
     const arc=document.getElementById('archive');
     if(arc&&arc.scrollIntoView)setTimeout(()=>arc.scrollIntoView({behavior:'smooth',block:'nearest'}),150);
   },480);

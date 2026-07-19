@@ -7,9 +7,9 @@ function kbLookup(title){
   const k=decodeURIComponent(title).replace(/_/g,' ').trim();
   return localKB[k]?{key:k,e:localKB[k]}:null;
 }
-function renderLocal(kbHit,txt,tp,tph,src){
+function renderLocal(kbHit,txt,tp,tph,src,announce){
   txt.textContent=kbHit.e.s;
-  presenceVoice('Record retrieved from local cache. '+kbHit.e.s);
+  if(announce)vSay(kbHit.e.s,false);
   if(kbHit.e.t&&kbHit.e.t.length){
     tph.hidden=false;
     for(const t of kbHit.e.t){
@@ -49,7 +49,6 @@ async function queryArchive(title,announce){
         src=document.getElementById('arcSrc');
   arc.hidden=false;img.hidden=true;tp.innerHTML='';tph.hidden=true;src.innerHTML='';
   txt.innerHTML='<span class="brkt">[ Information requested. Accessing Abidan Archives… ]</span>';
-  if(announce)presenceVoice('Information requested. Accessing archives. Record: '+title.replace(/_/g,' ')+'.');
   try{
     const url=WIKI+'/api.php?action=parse&format=json&origin=*&redirects=1'+
       '&prop=text%7Clinks&disablelimitreport=1&page='+encodeURIComponent(decodeURIComponent(title));
@@ -58,21 +57,21 @@ async function queryArchive(title,announce){
     if(seq!==arcSeq)return; // superseded by a newer query
     if(data.error||!data.parse||!data.parse.text){
       const kb=kbLookup(title);
-      if(kb){renderLocal(kb,txt,tp,tph,src);return;}
+      if(kb){renderLocal(kb,txt,tp,tph,src,announce);return;}
       txt.innerHTML='<span class="brkt">[ Record ends. No further data available in this archive. ]</span>';
-      presenceVoice('Record ends. No further data available.');
+      if(announce)presenceVoice('Record ends. No further data available.',false);
       return;
     }
     const{text:summary,imgSrc}=wikiSummary(data.parse.text['*']);
     if(!summary){
       const kb=kbLookup(title);
-      if(kb){renderLocal(kb,txt,tp,tph,src);return;}
+      if(kb){renderLocal(kb,txt,tp,tph,src,announce);return;}
       txt.innerHTML='<span class="brkt">[ Record exists but holds no readable summary. ]</span>';
       return;
     }
     // short attributed excerpt only — full record stays at the source
     txt.textContent=summary;
-    presenceVoice('Record retrieved. '+summary);
+    if(announce)vSay(summary,false); // deep dives are read; record panels read their own body
     if(imgSrc){img.src=/^https?:/.test(imgSrc)?imgSrc:WIKI+imgSrc;img.hidden=false;}
     const links=(data.parse.links||[])
       .filter(l=>l.ns===0&&l['*']&&l['*'].length<40)
@@ -91,10 +90,8 @@ async function queryArchive(title,announce){
         b.onclick=()=>{sfx('click');glitchDive(t.replace(/ /g,'_'));};
         tp.appendChild(b);
       }
-      presenceVoice('Suggested topics available.');
     }else{
       txt.textContent+='\n\n[ This record links to no further topics. Dead end. ]';
-      presenceVoice('This record links to no further topics.');
     }
     const pageTitle=data.parse.title||decodeURIComponent(title).replace(/_/g,' ');
     const href=WIKI+'/index.php/'+encodeURIComponent(pageTitle.replace(/ /g,'_'));
@@ -102,8 +99,8 @@ async function queryArchive(title,announce){
   }catch(err){
     if(seq!==arcSeq)return;
     const kb=kbLookup(title);
-    if(kb){renderLocal(kb,txt,tp,tph,src);return;}
+    if(kb){renderLocal(kb,txt,tp,tph,src,announce);return;}
     txt.innerHTML='<span class="brkt">[ Relay unavailable, and no local record matches. Dead end. ]</span>';
-    presenceVoice('Relay unavailable. No local record matches.');
+    if(announce)presenceVoice('Relay unavailable. No local record matches.',false);
   }
 }
