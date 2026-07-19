@@ -21,9 +21,11 @@ function presenceSay(n){
   document.getElementById('focusLine').textContent=n.name;
   lastNoteId=n.id;
   updateVoiceNote();
-  // announce the record, then read it — queued, so nothing cuts anything off
+  // announce the record, then read it — queued, so nothing cuts anything off.
+  // The body's opening [ header ] restates the iteration name the announcement
+  // just spoke, so it's skipped in speech (still shown on screen).
   sysVoice('Information requested. '+n.name.replace(/—/g,',')+'.');
-  if(n.body)vSay(n.body,false);
+  if(n.body)vSay(n.body.replace(/^\s*\[[^\]]*\]\s*/,''),false);
   queryArchive(wikiFor[n.id]||n.name.split('—')[0].trim().replace(/ /g,'_'),false);
 }
 let typeTimer=null,tickN=0;
