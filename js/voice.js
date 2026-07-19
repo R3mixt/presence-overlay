@@ -1,42 +1,10 @@
 /* ============ PRESENCE VOICE ============
-   One speech queue, two engines:
-   - neural: Kokoro-82M running on-device via WebAssembly (lazy-loaded from
-     CDN on first interaction, ~90 MB once, cached by the browser after).
-     This is the voice you actually want to listen to.
-   - browser: speechSynthesis fallback while the model loads, on data-saver /
-     small-screen devices, or if the CDN is unreachable. Installed voices are
-     ranked so the least robotic one is used.
-   Everything spoken goes through the queue, so lines no longer cancel each
-   other mid-sentence. */
+   One speech queue, one voice: Kokoro-82M running on-device in a Web Worker
+   (lazy-loaded from CDN on first interaction, ~90 MB once, cached by the
+   browser after). Until the model is ready — or on devices where it can't
+   load — the Presence is simply silent; there is no synthetic fallback voice,
+   and the overlay works fine without sound. */
 let voiceOn=true,narrating=false;
-
-/* ---- browser-voice ranking ---- */
-let chosenVoice=null;
-function scoreVoice(v){
-  const n=v.name,lang=v.lang||'';
-  if(!/^en/i.test(lang))return -1e4;
-  let s=0;
-  if(/natural|neural/i.test(n))s+=80;               // Edge / Azure neural
-  if(/google/i.test(n))s+=50;                        // Chrome network voices
-  if(/premium|enhanced|siri/i.test(n))s+=45;         // Apple high-quality
-  if(/aria|sonia|libby|ryan|guy|jenny/i.test(n))s+=8;
-  if(!v.localService)s+=10;                          // network voices read better
-  if(/en-GB/i.test(lang))s+=6;else if(/en-US/i.test(lang))s+=4;
-  if(/desktop|compact|espeak|david|sam|mark|zira|hazel|susan/i.test(n))s-=40;
-  if(/male|guy|ryan|davis|andrew|christopher|george|brian|david|mark/i.test(n)&&!/female/i.test(n))s+=3; // the Presence reads male here
-  return s;
-}
-function pickVoice(){
-  const vs=speechSynthesis.getVoices();
-  if(!vs.length)return null;
-  let best=null,bs=-1e4-1;
-  for(const v of vs){const s=scoreVoice(v);if(s>bs){bs=s;best=v;}}
-  return best;
-}
-if('speechSynthesis'in window){
-  chosenVoice=pickVoice();
-  speechSynthesis.onvoiceschanged=()=>{chosenVoice=pickVoice();};
-}
 
 /* ---- pronunciation guide for the books' proper nouns ----
    Respellings that steer any TTS engine toward the audiobook pronunciations.
@@ -133,10 +101,10 @@ let vq=[],vGen=0,vPumping=false,curSource=null,nextPrepared=null;
 function vFlush(){
   vGen++;vq.length=0;nextPrepared=null;
   if(curSource){try{curSource.stop();}catch(e){}curSource=null;}
-  if('speechSynthesis'in window)speechSynthesis.cancel();
 }
 function vSay(text,flush,force){
   if(!voiceOn&&!force)return;
+  if(neuralState!=='ready')return; // one voice only — silent until it exists
   if(flush)vFlush();
   const clean=speakable(text);
   if(!clean)return;
@@ -159,7 +127,7 @@ async function vPump(){
     try{out=await p;}catch(e){}
     if(gen!==vGen)break;
     if(out)await playPCM(out.audio,out.sampling_rate,gen);
-    else await browserSpeak(s);
+    // a failed generation skips its sentence — no fallback voice, no stall
     if(gen!==vGen)break;
   }
   vPumping=false;
@@ -182,21 +150,6 @@ function playPCM(f32,sr,gen){
     }catch(e){res();}
   });
 }
-function browserSpeak(s){
-  return new Promise(res=>{
-    if(!('speechSynthesis'in window)){res();return;}
-    let done=false;const fin=()=>{if(!done){done=true;res();}};
-    try{
-      const u=new SpeechSynthesisUtterance(s);
-      u.rate=0.98;u.pitch=1.0;u.volume=0.95;
-      if(chosenVoice)u.voice=chosenVoice;
-      u.onend=fin;u.onerror=fin;
-      speechSynthesis.speak(u);
-      setTimeout(fin,1500+s.length*100); // some engines drop onend
-    }catch(e){fin();}
-  });
-}
-
 /* ---- public interface (kept compatible with the rest of the app) ---- */
 function presenceVoice(text,interrupt){
   if(narrating)return; // never talk over narration
@@ -208,16 +161,16 @@ document.getElementById('voiceBtn').onclick=e=>{
   if(!voiceOn)vFlush();
   e.target.textContent=voiceOn?'Voice On':'Voice Off';
   sfx('click');
-  if(voiceOn)sysVoice('System voice online.');
+  if(voiceOn)sysVoice('Presence voice online.');
 };
 
 /* ---- panel status line ---- */
 let lastNoteId=null;
 function voiceNoteText(id){
   if(id&&audioMap[id])return 'Narration: recorded audio';
-  if(neuralState==='ready')return 'Narration: Presence neural voice · on-device';
-  if(neuralState==='loading')return 'Narration: system voice · neural voice loading '+(neuralPct?neuralPct+'%':'…');
-  return 'Narration: system voice';
+  if(neuralState==='ready')return 'Narration: Presence voice · on-device';
+  if(neuralState==='off')return 'Presence voice unavailable on this device · running silent';
+  return 'Presence voice loading '+(neuralPct?neuralPct+'%':'…')+' · silent until ready';
 }
 function updateVoiceNote(){
   const el=document.getElementById('audioNote');
@@ -232,6 +185,7 @@ playBtn.onclick=()=>{
   if(narrating||(audioEl&&!audioEl.paused)){stopAudio();return;}
   if(!currentNode)return;
   const url=audioMap[currentNode.id];
+  if(!url&&neuralState!=='ready'){updateVoiceNote();return;} // nothing to play yet
   playBtn.classList.add('playing');
   document.getElementById('playLbl').textContent='Stop narration';
   if(url){
