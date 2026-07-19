@@ -72,32 +72,58 @@ function speakable(text){
 }
 function splitSentences(t){return t.match(/[^.!?]+[.!?]+["')\]]?\s*/g)||[t];}
 
-/* ---- neural engine (Kokoro-82M, on-device) ---- */
+/* ---- neural engine (Kokoro-82M, on-device, in a Web Worker) ----
+   Inference runs off the main thread — an earlier build ran it inline and
+   froze the render loop for every sentence. */
 const NEURAL_VOICE='am_michael';
-let neuralTTS=null,neuralState='idle',neuralPct=0; // idle | loading | ready | off
+let neuralState='idle',neuralPct=0; // idle | loading | ready | off
+let ttsWorker=null,reqId=0;const reqPending=new Map();
 function neuralAllowed(){
   const small=window.screen&&Math.min(screen.width||9999,screen.height||9999)<760;
   const saveData=navigator.connection&&navigator.connection.saveData;
-  return !small&&!saveData&&typeof WebAssembly!=='undefined';
+  return !small&&!saveData&&typeof WebAssembly!=='undefined'&&typeof Worker!=='undefined';
 }
-async function loadNeural(){
+function neuralOff(){
+  neuralState='off';
+  if(ttsWorker){try{ttsWorker.terminate();}catch(e){}ttsWorker=null;}
+  for(const res of reqPending.values())res(null);
+  reqPending.clear();
+  updateVoiceNote();
+}
+function loadNeural(){
   if(neuralState!=='idle')return;
   if(!neuralAllowed()){neuralState='off';updateVoiceNote();return;}
   neuralState='loading';updateVoiceNote();
   try{
-    const{KokoroTTS}=await import('https://cdn.jsdelivr.net/npm/kokoro-js@1/+esm');
-    neuralTTS=await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{
-      dtype:'q8',device:'wasm',
-      progress_callback:x=>{
-        if(x&&x.status==='progress'&&x.total>2e6){
-          const p=Math.round(x.loaded/x.total*100);
-          if(p!==neuralPct){neuralPct=p;updateVoiceNote();}
-        }
+    ttsWorker=new Worker('js/voice-worker.js',{type:'module'});
+    ttsWorker.onerror=neuralOff;
+    ttsWorker.onmessage=e=>{
+      const m=e.data;
+      if(m.type==='progress'){
+        const p=Math.round(m.loaded/m.total*100);
+        if(p!==neuralPct){neuralPct=p;updateVoiceNote();}
+      }else if(m.type==='ready'){
+        neuralState='ready';updateVoiceNote();
+      }else if(m.type==='fail'){
+        neuralOff();
+      }else if(m.type==='result'){
+        const res=reqPending.get(m.id);
+        if(res){reqPending.delete(m.id);res(m.ok?{audio:m.audio,sampling_rate:m.rate}:null);}
       }
-    });
-    neuralState='ready';
-  }catch(e){neuralState='off';neuralTTS=null;}
-  updateVoiceNote();
+    };
+    ttsWorker.postMessage({type:'load'});
+  }catch(e){neuralOff();}
+}
+function neuralGenerate(text){
+  if(neuralState!=='ready'||!ttsWorker)return Promise.resolve(null);
+  return new Promise(res=>{
+    const id=++reqId;
+    reqPending.set(id,res);
+    ttsWorker.postMessage({type:'generate',id,text,voice:NEURAL_VOICE,speed:0.97});
+    setTimeout(()=>{ // a wedged worker must not wedge the speech queue
+      if(reqPending.has(id)){reqPending.delete(id);res(null);}
+    },30000);
+  });
 }
 // warm the model up front so it's usually ready by the first record
 document.addEventListener('pointerdown',()=>{loadNeural();},{once:true});
@@ -119,7 +145,7 @@ function vSay(text,flush,force){
 }
 function prepare(s){
   if(neuralState!=='ready'||!AC)return Promise.resolve(null);
-  return neuralTTS.generate(s,{voice:NEURAL_VOICE,speed:0.97}).catch(()=>null);
+  return neuralGenerate(s);
 }
 async function vPump(){
   if(vPumping)return;vPumping=true;
