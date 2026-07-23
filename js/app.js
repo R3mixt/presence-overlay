@@ -130,20 +130,50 @@ async function buildSystems(progressCb){
       continue;
     }
     if(node.beacon){
-      // sector / memorial marker: a quiet glow with a generous hit target
+      // sector: a vast translucent volume of the Way's light enclosing its
+      // member worlds — the largest thing in its region, as it should be.
+      // (nodes without shellR stay small markers, e.g. the 943 memorial)
       const col=node.beaconColor||0x5aa7ff;
-      const hit=new THREE.Mesh(new THREE.SphereGeometry(20,10,10),
+      const R=node.shellR||0;
+      const rings=[];
+      if(R){
+        // soft aurora shell: inner surface glow + faint outer haze
+        const shell=new THREE.Mesh(new THREE.SphereGeometry(R,48,32),
+          new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:.05,
+            side:THREE.BackSide,blending:THREE.AdditiveBlending,depthWrite:false}));
+        const haze=new THREE.Mesh(new THREE.SphereGeometry(R,48,32),
+          new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:.018,
+            side:THREE.FrontSide,blending:THREE.AdditiveBlending,depthWrite:false}));
+        grp.add(shell,haze);
+        // slow great-circle survey rings on the boundary
+        const mkRing=tilt=>{
+          const seg=128,pts=new Float32Array(seg*3);
+          for(let i=0;i<seg;i++){const a=i/seg*6.283;
+            pts[i*3]=Math.cos(a)*R;pts[i*3+1]=0;pts[i*3+2]=Math.sin(a)*R;}
+          const g2=new THREE.BufferGeometry();
+          g2.setAttribute('position',new THREE.BufferAttribute(pts,3));
+          const ln=new THREE.LineLoop(g2,new THREE.LineBasicMaterial({color:col,
+            transparent:true,opacity:.16,blending:THREE.AdditiveBlending,depthWrite:false}));
+          ln.rotation.x=tilt;ln.rotation.z=tilt*.6;
+          return ln;
+        };
+        const r1=mkRing(0.35),r2=mkRing(-0.85);
+        grp.add(r1,r2);rings.push(r1,r2);
+      }
+      // designation buoy at the top pole: pick target + label anchor
+      const buoy=new THREE.Group();buoy.position.y=R;
+      const hit=new THREE.Mesh(new THREE.SphereGeometry(R?30:22,10,10),
         new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
       const mark=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTexture(col,.5),
-        transparent:true,opacity:.55,depthWrite:false,blending:THREE.AdditiveBlending}));
-      mark.scale.set(40,40,1);
-      const ring=new THREE.Mesh(new THREE.TorusGeometry(13,0.35,8,48),
-        new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:.5}));
-      ring.rotation.x=Math.PI/2.2;
-      grp.add(hit,mark,ring);
+        transparent:true,opacity:.6,depthWrite:false,blending:THREE.AdditiveBlending}));
+      mark.scale.set(R?64:44,R?64:44,1);
+      const core=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.OctahedronGeometry(R?11:8,0)),
+        new THREE.LineBasicMaterial({color:col,transparent:true,opacity:.8}));
+      buoy.add(hit,mark,core);
+      grp.add(buoy);
       hit.userData.node=node;pickables.push(hit);
-      systems[node.id]={group:grp,node,beacon:true,anchor:ring};
-      labelNodes.push({node,get:()=>grp.position});
+      systems[node.id]={group:grp,node,beacon:true,anchor:core,rings};
+      labelNodes.push({node,get:()=>{const v=new THREE.Vector3();buoy.getWorldPosition(v);return v;}});
       continue;
     }
     if(node.vroshir){
@@ -313,7 +343,7 @@ function buildWay(){
     const pts=curve.getPoints(64);
     const lg=new THREE.BufferGeometry().setFromPoints(pts);
     scene.add(new THREE.Line(lg,new THREE.LineBasicMaterial({color:col,
-      transparent:true,opacity:col===0xd9b36b?.16:.10,
+      transparent:true,opacity:col===0xd9b36b?.18:.13,
       blending:THREE.AdditiveBlending,depthWrite:false})));
   }
   // FAILING connections: corrupted worlds' filaments fragment and stop short of the sector
@@ -551,14 +581,15 @@ function getLabelEl(i){
   return labelPool[i];
 }
 const V=new THREE.Vector3();
-function placeLabel(i,worldPos,text,geo){
+function placeLabel(i,worldPos,text,kind){
   V.copy(worldPos).project(camera);
   const d=getLabelEl(i);
   if(V.z<1&&V.z>-1){
     d.style.left=((V.x+1)/2*innerWidth)+'px';
     d.style.top=((-V.y+1)/2*innerHeight)+'px';
     d.querySelector('.txt').textContent=text;
-    d.classList.toggle('geo',!!geo);
+    d.classList.toggle('geo',kind==='geo');
+    d.classList.toggle('sector',kind==='sector');
     d.classList.add('show');
     return true;
   }
@@ -575,13 +606,14 @@ function updateLabels(){
   let i=0;
   if(mode==='way'){
     for(const ln of labelNodes)
-      if(placeLabel(i,ln.get(),ln.node.short||ln.node.name.split('—')[0].trim(),false))i++;else i++;
+      if(placeLabel(i,ln.get(),ln.node.short||ln.node.name.split('—')[0].trim(),
+        (ln.node.beacon&&ln.node.shellR)?'sector':null))i++;else i++;
   }else if(focusSys){
     const pw=new THREE.Vector3();focusSys.planet.getWorldPosition(pw);
     for(const p of (worldPois[focusSys.node.world]||[])){
       p._marker.getWorldPosition(tmpV);
       const wp=tmpV.clone();
-      if(frontFacing(wp,pw))placeLabel(i,wp,p.name.split('—')[0].trim(),false);
+      if(frontFacing(wp,pw))placeLabel(i,wp,p.name.split('—')[0].trim(),null);
       else getLabelEl(i).classList.remove('show');
       i++;
     }
@@ -589,7 +621,7 @@ function updateLabels(){
       for(const g of focusSys.node._geo){
         g.obj.getWorldPosition(tmpV);
         const wp=tmpV.clone();
-        if(frontFacing(wp,pw))placeLabel(i,wp,g.name,true);
+        if(frontFacing(wp,pw))placeLabel(i,wp,g.name,'geo');
         else getLabelEl(i).classList.remove('show');
         i++;
       }
@@ -605,7 +637,11 @@ function animate(){
   for(const id in systems){
     const s=systems[id];
     if(s.station){s.anchor.rotation.y+=dt*.25;s.anchor.rotation.x=Math.sin(t*.3)*.1;continue;}
-    if(s.beacon){s.anchor.rotation.z+=dt*.1;continue;}
+    if(s.beacon){
+      s.anchor.rotation.y+=dt*.3;s.anchor.rotation.z+=dt*.12;
+      if(s.rings)for(const r of s.rings)r.rotation.y+=dt*.025;
+      continue;
+    }
     if(s.corrupt||s.edge||s.vroshir)continue; // anomalies don't orbit — tumble/flicker handled separately
     const a=s.phase+t*(6.283/s.W.period);
     s.holder.position.set(Math.cos(a)*s.W.orbit,0,Math.sin(a)*s.W.orbit);

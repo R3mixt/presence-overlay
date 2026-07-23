@@ -104,6 +104,9 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--white);
   text-shadow:0 0 8px #000;transition:opacity .25s;opacity:0}
 .lbl3d.show{opacity:1}
 .lbl3d.geo{color:#7f8ab0;font-size:8px;letter-spacing:.28em}
+.lbl3d.sector{font-family:'Marcellus',serif;font-size:15px;letter-spacing:.6em;color:#8fbaff;
+  text-shadow:0 0 18px #5aa7ff99,0 0 6px #000;text-transform:uppercase}
+.lbl3d.sector .tick{height:18px;background:var(--way-dim)}
 .lbl3d .tick{display:block;width:1px;height:10px;background:var(--violet-dim);margin:3px auto 0}
 .lbl3d.geo .tick{display:none}
 .hint{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);font-size:9px;
